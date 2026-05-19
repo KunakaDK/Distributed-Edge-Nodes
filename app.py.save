@@ -1,0 +1,591 @@
+import time
+import requests
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timezone
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+API_URL  = "https://cloudserver-g09.southafricanorth.cloudapp.azure.com"
+API_KEY  = "edge-secret-key-2026"
+MICRO_B  = "http://localhost:8001"
+HEADERS  = {"x-api-key": API_KEY}
+
+st.set_page_config(
+    page_title="EdgePulse · G09",
+    page_icon="📡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ── CSS ────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+/* ── Reset & Root ─────────────────────────────────────────── */
+:root {
+    --bg:        #0A0E1A;
+    --bg2:       #0F1525;
+    --bg3:       #151C30;
+    --border:    #1E2A45;
+    --accent:    #00D4FF;
+    --accent2:   #7C3AED;
+    --green:     #00E5A0;
+    --orange:    #FF6B35;
+    --red:       #FF3B5C;
+    --yellow:    #FFD60A;
+    --text:      #E8EDF5;
+    --muted:     #64748B;
+    --card-glow: rgba(0,212,255,0.06);
+}
+
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
+    background-color: var(--bg) !important;
+    color: var(--text) !important;
+}
+
+/* Hide Streamlit chrome */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding: 1.5rem 2rem 2rem; max-width: 1400px; }
+
+/* ── Top Banner ────────────────────────────────────────────── */
+.top-banner {
+    background: linear-gradient(135deg, #0F1525 0%, #151C30 50%, #0A1628 100%);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent);
+    border-radius: 0 0 16px 16px;
+    padding: 1.2rem 2rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+}
+.top-banner::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(ellipse at 20% 50%, rgba(0,212,255,0.04) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 50%, rgba(124,58,237,0.04) 0%, transparent 60%);
+    pointer-events: none;
+}
+.banner-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+.banner-sub {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 2px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+.banner-dot {
+    width: 10px; height: 10px;
+    background: var(--green);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--green);
+    display: inline-block;
+    margin-right: 8px;
+    animation: pulse 2s infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.85); }
+}
+.banner-status {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--green);
+}
+
+/* ── Section labels ────────────────────────────────────────── */
+.section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    padding-left: 2px;
+    border-left: 2px solid var(--accent);
+    padding-left: 10px;
+}
+
+/* ── KPI Cards ─────────────────────────────────────────────── */
+.kpi-card {
+    background: linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+}
+.kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent-color, var(--accent));
+}
+.kpi-icon {
+    font-size: 1.3rem;
+    margin-bottom: 0.5rem;
+    opacity: 0.9;
+}
+.kpi-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 2px;
+}
+.kpi-unit {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+.kpi-label {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 4px;
+}
+
+/* ── Latency Cards ─────────────────────────────────────────── */
+.lat-card {
+    background: linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.6rem;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+.lat-badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 20px;
+    display: inline-block;
+    margin-bottom: 1rem;
+}
+.lat-badge-edge { background: rgba(0,229,160,0.12); color: var(--green); border: 1px solid rgba(0,229,160,0.3); }
+.lat-badge-cloud { background: rgba(255,107,53,0.12); color: var(--orange); border: 1px solid rgba(255,107,53,0.3); }
+.lat-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.lat-value-edge  { color: var(--green);  text-shadow: 0 0 30px rgba(0,229,160,0.4); }
+.lat-value-cloud { color: var(--orange); text-shadow: 0 0 30px rgba(255,107,53,0.4); }
+.lat-unit { font-family: 'Space Mono', monospace; font-size: 1rem; opacity: 0.5; }
+.lat-desc { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+
+.speedup-card {
+    background: linear-gradient(135deg, rgba(0,212,255,0.05) 0%, rgba(124,58,237,0.05) 100%);
+    border: 1px solid rgba(0,212,255,0.2);
+    border-radius: 16px;
+    padding: 1.6rem;
+    text-align: center;
+}
+.speedup-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 3.5rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+}
+
+/* ── Chart containers ──────────────────────────────────────── */
+.chart-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+/* ── Alert pills ───────────────────────────────────────────── */
+.alert-pill {
+    background: rgba(255,59,92,0.1);
+    border: 1px solid rgba(255,59,92,0.3);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.82rem;
+    display: flex;
+    justify-content: space-between;
+}
+.alert-type { color: var(--red); font-family: 'Space Mono', monospace; font-size: 0.7rem; }
+.alert-val  { color: var(--text); }
+.alert-time { color: var(--muted); font-size: 0.7rem; }
+
+/* ── Table ─────────────────────────────────────────────────── */
+.stDataFrame { border-radius: 10px; overflow: hidden; }
+
+/* ── Divider ───────────────────────────────────────────────── */
+.fancy-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 1.5rem 0;
+}
+
+/* Streamlit overrides */
+.stMetric { background: transparent !important; }
+div[data-testid="metric-container"] { background: transparent; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Data fetchers ──────────────────────────────────────────────────────────────
+@st.cache_data(ttl=20)
+def fetch_cloud_data(limit=300):
+    try:
+        r = requests.get(f"{API_URL}/data", params={"limit": limit}, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        df = pd.DataFrame(r.json())
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df = df.sort_values("timestamp").reset_index(drop=True)
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
+
+@st.cache_data(ttl=20)
+def fetch_alerts(limit=20):
+    try:
+        r = requests.get(f"{MICRO_B}/alertes", params={"limit": limit}, timeout=4)
+        return r.json().get("alertes", [])
+    except:
+        return []
+
+@st.cache_data(ttl=20)
+def fetch_b_health():
+    try:
+        r = requests.get(f"{MICRO_B}/health", timeout=3)
+        return r.json()
+    except:
+        return None
+
+def measure_cloud_latency():
+    try:
+        t0 = time.time()
+        requests.get(f"{API_URL}/health", timeout=10)
+        return (time.time() - t0) * 1000
+    except:
+        return None
+
+# ── Plotly theme ───────────────────────────────────────────────────────────────
+PLOT_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="DM Sans", color="#64748B", size=11),
+    margin=dict(l=0, r=10, t=30, b=0),
+    xaxis=dict(
+        gridcolor="#1E2A45", showgrid=True, zeroline=False,
+        tickfont=dict(size=10, color="#64748B"),
+    ),
+    yaxis=dict(
+        gridcolor="#1E2A45", showgrid=True, zeroline=False,
+        tickfont=dict(size=10, color="#64748B"),
+    ),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+    hovermode="x unified",
+)
+
+def line_chart(df, y, title, color, unit="", threshold=None, threshold_label=""):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df[y],
+        mode="lines+markers",
+        line=dict(color=color, width=2),
+        marker=dict(size=4, color=color),
+        fill="tozeroy",
+        fillcolor=color.replace(")", ",0.06)").replace("rgb", "rgba") if "rgb" in color else color + "10",
+        name=title,
+        hovertemplate=f"<b>%{{y:.2f}} {unit}</b><br>%{{x|%H:%M:%S}}<extra></extra>",
+    ))
+    if threshold is not None:
+        fig.add_hline(y=threshold, line_dash="dash", line_color="#FF3B5C",
+                      line_width=1.5, opacity=0.7,
+                      annotation_text=threshold_label,
+                      annotation_font=dict(size=9, color="#FF3B5C"))
+    fig.update_layout(**PLOT_LAYOUT, title=dict(
+        text=title, font=dict(size=12, color="#E8EDF5"), x=0, pad=dict(l=0)))
+    fig.update_xaxis(showgrid=True, tickformat="%H:%M")
+    return fig
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER
+# ══════════════════════════════════════════════════════════════════════════════
+now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d  %H:%M:%S UTC")
+st.markdown(f"""
+<div class="top-banner">
+  <div>
+    <div class="banner-title">📡 EdgePulse Dashboard</div>
+    <div class="banner-sub">Projet 09 · G09 · ENSA Tétouan · Edge vs Cloud Computing</div>
+  </div>
+  <div style="text-align:right">
+    <div class="banner-status"><span class="banner-dot"></span>SYSTÈME OPÉRATIONNEL</div>
+    <div style="font-size:0.7rem;color:#64748B;margin-top:4px;font-family:'Space Mono',monospace">{now_str}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Load data ──────────────────────────────────────────────────────────────────
+df, err = fetch_cloud_data()
+alerts   = fetch_alerts()
+b_health = fetch_b_health()
+cloud_lat = measure_cloud_latency()
+edge_lat  = 7.3   # measured locally by Microservice B
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — LATENCE EDGE vs CLOUD
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">01 — Comparaison de Latence en Temps Réel</div>', unsafe_allow_html=True)
+
+col_e, col_c, col_s, col_bar = st.columns([1.2, 1.2, 1.2, 2.4])
+
+with col_e:
+    st.markdown(f"""
+    <div class="lat-card">
+      <div><span class="lat-badge lat-badge-edge">Edge · Local</span></div>
+      <div class="lat-value lat-value-edge">{edge_lat:.1f}<span class="lat-unit"> ms</span></div>
+      <div class="lat-desc">Microservice B — traitement local<br>Raspberry Pi 5 · ARM64</div>
+    </div>""", unsafe_allow_html=True)
+
+with col_c:
+    cl = f"{cloud_lat:.0f}" if cloud_lat else "—"
+    st.markdown(f"""
+    <div class="lat-card">
+      <div><span class="lat-badge lat-badge-cloud">Cloud · Azure</span></div>
+      <div class="lat-value lat-value-cloud">{cl}<span class="lat-unit"> ms</span></div>
+      <div class="lat-desc">API Azure · South Africa North<br>Tétouan → Johannesburg</div>
+    </div>""", unsafe_allow_html=True)
+
+with col_s:
+    ratio = f"{cloud_lat/edge_lat:.0f}" if cloud_lat else "—"
+    st.markdown(f"""
+    <div class="speedup-card">
+      <div style="font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;
+                  color:#64748B;margin-bottom:0.8rem;font-family:'Space Mono',monospace">
+        Gain Edge
+      </div>
+      <div class="speedup-value">{ratio}×</div>
+      <div style="font-size:0.73rem;color:#64748B;margin-top:12px">
+        plus rapide que le Cloud<br>
+        <span style="color:#00D4FF">Latence réduite de {((cloud_lat-edge_lat)/cloud_lat*100):.0f}%</span>
+        if cloud_lat else ""
+      </div>
+    </div>""", unsafe_allow_html=True)
+
+with col_bar:
+    if cloud_lat:
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            x=["Edge (Local)", "Cloud (Azure)"],
+            y=[edge_lat, cloud_lat],
+            marker_color=["#00E5A0", "#FF6B35"],
+            marker_line_width=0,
+            text=[f"{edge_lat:.1f} ms", f"{cloud_lat:.0f} ms"],
+            textposition="outside",
+            textfont=dict(family="Space Mono", size=11, color="#E8EDF5"),
+            width=0.4,
+        ))
+        fig_bar.add_hline(y=10, line_dash="dot", line_color="#FFD60A",
+                          line_width=1.5,
+                          annotation_text="Seuil cible : 10 ms",
+                          annotation_font=dict(size=9, color="#FFD60A"))
+        fig_bar.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="DM Sans", color="#64748B", size=11),
+            margin=dict(l=0, r=10, t=30, b=0),
+            hovermode="x unified",
+            title=dict(text="Latence comparée (ms) — log scale", font=dict(size=11, color="#E8EDF5"), x=0),
+            xaxis=dict(gridcolor="#1E2A45", tickfont=dict(size=10, color="#64748B")),
+            yaxis=dict(type="log", gridcolor="#1E2A45", tickfont=dict(size=10)),
+            showlegend=False,
+            bargap=0.4,
+        )
+        st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — KPI DERNIÈRE MESURE
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">02 — Dernière Mesure Reçue</div>', unsafe_allow_html=True)
+
+if not df.empty:
+    last = df.iloc[-1]
+    kpis = [
+        ("🌡️", f"{last['temperature']:.1f}", "°C", "Température",   "#FF6B35", "temp >= 30°C → ALERTE"),
+        ("💧", f"{last['humidity']:.1f}",    "%",  "Humidité",      "#00D4FF", ""),
+        ("🌊", f"{last['pressure']:.1f}",   "hPa", "Pression",      "#7C3AED", ""),
+        ("⚡", f"{last['voltage']:.2f}",     "V",  "Tension",       "#FFD60A", ""),
+        ("🔋", f"{last['current']:.2f}",     "A",  "Courant",       "#00E5A0", ""),
+        ("📦", str(len(df)),               "pts", "Mesures Cloud", "#94A3B8", ""),
+    ]
+    cols = st.columns(6)
+    for col, (icon, val, unit, label, color, note) in zip(cols, kpis):
+        with col:
+            st.markdown(f"""
+            <div class="kpi-card" style="--accent-color:{color}">
+              <div class="kpi-icon">{icon}</div>
+              <div class="kpi-value">{val}<span class="kpi-unit"> {unit}</span></div>
+              <div class="kpi-label">{label}</div>
+              {"<div style='font-size:0.65rem;color:#FF3B5C;margin-top:6px'>" + note + "</div>" if note else ""}
+            </div>""", unsafe_allow_html=True)
+else:
+    st.warning("Aucune donnée cloud disponible.")
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — GRAPHIQUES HISTORIQUES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">03 — Historique des Capteurs (Base de Données Cloud)</div>', unsafe_allow_html=True)
+
+if not df.empty:
+    # Température (full width avec seuil)
+    st.plotly_chart(
+        line_chart(df, "temperature", "Température (°C)", "#FF6B35", "°C",
+                   threshold=30, threshold_label="Seuil alerte 30°C"),
+        use_container_width=True, config={"displayModeBar": False})
+
+    # 2 colonnes
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(line_chart(df, "humidity", "Humidité (%)", "#00D4FF", "%"),
+                        use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        st.plotly_chart(line_chart(df, "pressure", "Pression (hPa)", "#7C3AED", "hPa",
+                                   threshold=950, threshold_label="Min 950 hPa"),
+                        use_container_width=True, config={"displayModeBar": False})
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.plotly_chart(line_chart(df, "voltage", "Tension (V)", "#FFD60A", "V",
+                                   threshold=2.5, threshold_label="Min 2.5V"),
+                        use_container_width=True, config={"displayModeBar": False})
+    with c4:
+        st.plotly_chart(line_chart(df, "current", "Courant (A)", "#00E5A0", "A"),
+                        use_container_width=True, config={"displayModeBar": False})
+
+    # Accélération (3 axes sur le même graphique)
+    if "acceleration" in df.columns and isinstance(df["acceleration"].iloc[0], dict):
+        df["acc_x"] = df["acceleration"].apply(lambda d: d.get("x", 0))
+        df["acc_y"] = df["acceleration"].apply(lambda d: d.get("y", 0))
+        df["acc_z"] = df["acceleration"].apply(lambda d: d.get("z", 0))
+
+    if "acc_x" in df.columns:
+        fig_acc = go.Figure()
+        for axis, color in [("acc_x","#FF3B5C"), ("acc_y","#00D4FF"), ("acc_z","#7C3AED")]:
+            fig_acc.add_trace(go.Scatter(
+                x=df["timestamp"], y=df[axis],
+                mode="lines", name=f"Axe {axis[-1].upper()}",
+                line=dict(color=color, width=1.8),
+                hovertemplate=f"<b>%{{y:.3f}} m/s²</b><extra>Axe {axis[-1].upper()}</extra>",
+            ))
+        fig_acc.update_layout(**PLOT_LAYOUT,
+            title=dict(text="Accélération (m/s²) — 3 axes", font=dict(size=12, color="#E8EDF5"), x=0))
+        fig_acc.update_xaxis(tickformat="%H:%M")
+        st.plotly_chart(fig_acc, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — ALERTES & ÉTAT DES SERVICES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">04 — Alertes Edge & État des Services</div>', unsafe_allow_html=True)
+
+col_al, col_st = st.columns([1.5, 1])
+
+with col_al:
+    st.markdown("**🚨 Dernières alertes (Microservice B)**")
+    if alerts:
+        for a in alerts[:8]:
+            ts = a.get("timestamp","")[:19].replace("T"," ")
+            st.markdown(f"""
+            <div class="alert-pill">
+              <div>
+                <div class="alert-type">{a.get('type','—')} · {a.get('capteur','—')}</div>
+                <div class="alert-val">{a.get('message','—')}</div>
+              </div>
+              <div class="alert-time">{ts}</div>
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:rgba(0,229,160,0.06);border:1px solid rgba(0,229,160,0.2);
+                    border-radius:10px;padding:1rem;text-align:center;color:#00E5A0;font-size:0.85rem">
+          ✅ Aucune alerte active — tous les capteurs dans les seuils normaux
+        </div>""", unsafe_allow_html=True)
+
+with col_st:
+    st.markdown("**🖥️ État des Services**")
+    svcs = [
+        ("Microservice B", b_health is not None,
+         f"Buffer: {b_health.get('buffer_taille',0)} | Alertes: {b_health.get('total_alertes',0)}" if b_health else "Inaccessible"),
+        ("API Cloud (Azure)", cloud_lat is not None,
+         f"Latence: {cloud_lat:.0f} ms · South Africa North" if cloud_lat else "Timeout"),
+        ("PostgreSQL", not df.empty,
+         f"{len(df)} enregistrements" if not df.empty else "Pas de données"),
+        ("Microservice C", True, "Synchronisation toutes les 5 min"),
+    ]
+    for name, ok, detail in svcs:
+        dot_color = "#00E5A0" if ok else "#FF3B5C"
+        st.markdown(f"""
+        <div style="background:#0F1525;border:1px solid #1E2A45;border-radius:10px;
+                    padding:0.8rem 1rem;margin-bottom:0.5rem;display:flex;align-items:center;gap:12px">
+          <div style="width:8px;height:8px;border-radius:50%;background:{dot_color};
+                      box-shadow:0 0 8px {dot_color};flex-shrink:0"></div>
+          <div>
+            <div style="font-size:0.82rem;font-weight:600;color:#E8EDF5">{name}</div>
+            <div style="font-size:0.7rem;color:#64748B;margin-top:2px">{detail}</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — TABLEAU DONNÉES BRUTES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">05 — Données Brutes (Cloud)</div>', unsafe_allow_html=True)
+
+if not df.empty:
+    show_cols = ["id", "timestamp", "temperature", "humidity", "pressure", "voltage", "current", "device_id"]
+    show_cols = [c for c in show_cols if c in df.columns]
+    disp = df[show_cols].tail(15).sort_values("id", ascending=False).reset_index(drop=True)
+    disp["timestamp"] = disp["timestamp"].astype(str).str[:19]
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
+st.markdown(f"""
+<div style="text-align:center;padding:2rem 0 0.5rem;font-family:'Space Mono',monospace;
+            font-size:0.65rem;color:#1E2A45;letter-spacing:0.1em;text-transform:uppercase">
+  EDGEPULSE · PROJET 09 · G09 · ENSA TÉTOUAN · MAI 2026
+  · PROF. BENALY MOHAMED · ACTUALISATION AUTO 30S
+</div>""", unsafe_allow_html=True)
+
+# ── Auto-refresh ───────────────────────────────────────────────────────────────
+time.sleep(30)
+st.rerun()

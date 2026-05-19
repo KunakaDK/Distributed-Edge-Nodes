@@ -1,0 +1,511 @@
+import time
+import requests
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+from datetime import datetime, timezone
+
+# ── Configuration ──────────────────────────────────────────────────────────────
+API_URL  = "https://cloudserver-g09.southafricanorth.cloudapp.azure.com"
+API_KEY  = "edge-secret-key-2026"
+MICRO_B  = "http://localhost:8001"
+HEADERS  = {"x-api-key": API_KEY}
+
+st.set_page_config(
+    page_title="EdgePulse · G09",
+    page_icon="📡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+:root {
+    --bg:#0A0E1A; --bg2:#0F1525; --bg3:#151C30; --border:#1E2A45;
+    --accent:#00D4FF; --accent2:#7C3AED; --green:#00E5A0;
+    --orange:#FF6B35; --red:#FF3B5C; --yellow:#FFD60A;
+    --text:#E8EDF5; --muted:#64748B;
+}
+html,body,[class*="css"]{font-family:'DM Sans',sans-serif;background-color:var(--bg)!important;color:var(--text)!important;}
+#MainMenu,footer,header{visibility:hidden;}
+.block-container{padding:1.5rem 2rem 2rem;max-width:1400px;}
+.top-banner{background:linear-gradient(135deg,#0F1525 0%,#151C30 50%,#0A1628 100%);border:1px solid var(--border);border-top:2px solid var(--accent);border-radius:0 0 16px 16px;padding:1.2rem 2rem;margin-bottom:1.5rem;display:flex;align-items:center;justify-content:space-between;position:relative;overflow:hidden;}
+.top-banner::before{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:radial-gradient(ellipse at 20% 50%,rgba(0,212,255,0.04) 0%,transparent 60%),radial-gradient(ellipse at 80% 50%,rgba(124,58,237,0.04) 0%,transparent 60%);pointer-events:none;}
+.banner-title{font-family:'Space Mono',monospace;font-size:1.5rem;font-weight:700;color:var(--accent);letter-spacing:-0.02em;line-height:1.2;}
+.banner-sub{font-size:0.78rem;color:var(--muted);margin-top:2px;letter-spacing:0.05em;text-transform:uppercase;}
+.banner-dot{width:10px;height:10px;background:var(--green);border-radius:50%;box-shadow:0 0 12px var(--green);display:inline-block;margin-right:8px;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(.85);}}
+.banner-status{font-family:'Space Mono',monospace;font-size:0.72rem;color:var(--green);}
+.section-label{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem;border-left:2px solid var(--accent);padding-left:10px;}
+.kpi-card{background:linear-gradient(135deg,var(--bg2) 0%,var(--bg3) 100%);border:1px solid var(--border);border-radius:12px;padding:1.2rem 1.4rem;position:relative;overflow:hidden;}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent-color,var(--accent));}
+.kpi-icon{font-size:1.3rem;margin-bottom:.5rem;opacity:.9;}
+.kpi-value{font-family:'Space Mono',monospace;font-size:1.8rem;font-weight:700;color:var(--text);line-height:1;margin-bottom:2px;}
+.kpi-unit{font-family:'Space Mono',monospace;font-size:.85rem;color:var(--muted);}
+.kpi-label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:4px;}
+.lat-card{background:linear-gradient(135deg,var(--bg2) 0%,var(--bg3) 100%);border:1px solid var(--border);border-radius:16px;padding:1.6rem;text-align:center;}
+.lat-badge{font-family:'Space Mono',monospace;font-size:.6rem;letter-spacing:.2em;text-transform:uppercase;padding:4px 10px;border-radius:20px;display:inline-block;margin-bottom:1rem;}
+.lat-badge-edge{background:rgba(0,229,160,.12);color:var(--green);border:1px solid rgba(0,229,160,.3);}
+.lat-badge-cloud{background:rgba(255,107,53,.12);color:var(--orange);border:1px solid rgba(255,107,53,.3);}
+.lat-value{font-family:'Space Mono',monospace;font-size:3rem;font-weight:700;line-height:1;margin-bottom:4px;}
+.lat-value-edge{color:var(--green);text-shadow:0 0 30px rgba(0,229,160,.4);}
+.lat-value-cloud{color:var(--orange);text-shadow:0 0 30px rgba(255,107,53,.4);}
+.lat-unit{font-family:'Space Mono',monospace;font-size:1rem;opacity:.5;}
+.lat-desc{font-size:.75rem;color:var(--muted);margin-top:8px;}
+.speedup-card{background:linear-gradient(135deg,rgba(0,212,255,.05) 0%,rgba(124,58,237,.05) 100%);border:1px solid rgba(0,212,255,.2);border-radius:16px;padding:1.6rem;text-align:center;}
+.speedup-value{font-family:'Space Mono',monospace;font-size:3.5rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1;}
+.alert-pill{background:rgba(255,59,92,.1);border:1px solid rgba(255,59,92,.3);border-radius:8px;padding:.6rem 1rem;margin-bottom:.5rem;font-size:.82rem;display:flex;justify-content:space-between;}
+.alert-type{color:var(--red);font-family:'Space Mono',monospace;font-size:.7rem;}
+.alert-val{color:var(--text);}
+.alert-time{color:var(--muted);font-size:.7rem;}
+.fancy-divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:1.5rem 0;}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Mesures de latence (sans cache — toujours fraîches) ───────────────────────
+def measure_edge_latency(n=5):
+    """Mesure aller-retour vers Microservice B (moyenne de n essais)."""
+    latencies = []
+    for _ in range(n):
+        try:
+            t0 = time.time()
+            requests.get(f"{MICRO_B}/health", timeout=5)
+            latencies.append((time.time() - t0) * 1000)
+            time.sleep(0.05)
+        except Exception:
+            pass
+    return sum(latencies) / len(latencies) if latencies else None
+
+def measure_cloud_latency(n=5):
+    """Mesure aller-retour vers l'API Azure (moyenne de n essais)."""
+    latencies = []
+    for _ in range(n):
+        try:
+            t0 = time.time()
+            requests.get(f"{API_URL}/health", timeout=10)
+            latencies.append((time.time() - t0) * 1000)
+            time.sleep(0.1)
+        except Exception:
+            pass
+    return sum(latencies) / len(latencies) if latencies else None
+
+# ── Data fetchers (avec cache 20s) ────────────────────────────────────────────
+@st.cache_data(ttl=20)
+def fetch_cloud_data(limit=300):
+    try:
+        r = requests.get(f"{API_URL}/data", params={"limit": limit},
+                         headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        df = pd.DataFrame(r.json())
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df = df.sort_values("timestamp").reset_index(drop=True)
+        return df, None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
+
+@st.cache_data(ttl=20)
+def fetch_alerts(limit=20):
+    try:
+        r = requests.get(f"{MICRO_B}/alertes", params={"limit": limit}, timeout=4)
+        return r.json().get("alertes", [])
+    except Exception:
+        return []
+
+@st.cache_data(ttl=20)
+def fetch_b_health():
+    try:
+        r = requests.get(f"{MICRO_B}/health", timeout=3)
+        return r.json()
+    except Exception:
+        return None
+
+@st.cache_data(ttl=20)
+def fetch_cloud_health():
+    try:
+        r = requests.get(f"{API_URL}/health", timeout=5)
+        return r.json()
+    except Exception:
+        return None
+
+# ── Historique des latences en session ────────────────────────────────────────
+if "latency_history" not in st.session_state:
+    st.session_state.latency_history = []   # liste de {ts, edge, cloud}
+
+# ── Plotly base layout ────────────────────────────────────────────────────────
+BASE_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="DM Sans", color="#64748B", size=11),
+    margin=dict(l=0, r=10, t=30, b=0),
+    hovermode="x unified",
+    xaxis=dict(gridcolor="#1E2A45", showgrid=True, zeroline=False,
+               tickfont=dict(size=10, color="#64748B")),
+    yaxis=dict(gridcolor="#1E2A45", showgrid=True, zeroline=False,
+               tickfont=dict(size=10, color="#64748B")),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+)
+
+def line_chart(df, y, title, color, unit="", threshold=None, threshold_label=""):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df[y],
+        mode="lines+markers",
+        line=dict(color=color, width=2),
+        marker=dict(size=4, color=color),
+        fill="tozeroy", fillcolor=color + "18",
+        name=title,
+        hovertemplate=f"<b>%{{y:.2f}} {unit}</b><br>%{{x|%H:%M:%S}}<extra></extra>",
+    ))
+    if threshold is not None:
+        fig.add_hline(y=threshold, line_dash="dash", line_color="#FF3B5C",
+                      line_width=1.5, opacity=0.7,
+                      annotation_text=threshold_label,
+                      annotation_font=dict(size=9, color="#FF3B5C"))
+    fig.update_layout(**BASE_LAYOUT,
+        title=dict(text=title, font=dict(size=12, color="#E8EDF5"), x=0))
+    fig.update_xaxis(tickformat="%H:%M")
+    return fig
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHARGEMENT — tout est mesuré/récupéré à chaque refresh
+# ══════════════════════════════════════════════════════════════════════════════
+now_utc   = datetime.now(timezone.utc)
+now_str   = now_utc.strftime("%Y-%m-%d  %H:%M:%S UTC")
+
+with st.spinner("Mesure des latences en cours…"):
+    edge_lat  = measure_edge_latency()
+    cloud_lat = measure_cloud_latency()
+
+df, err   = fetch_cloud_data()
+alerts    = fetch_alerts()
+b_health  = fetch_b_health()
+c_health  = fetch_cloud_health()
+
+# Enregistre dans l'historique de session
+if edge_lat and cloud_lat:
+    st.session_state.latency_history.append({
+        "ts":    now_utc,
+        "edge":  edge_lat,
+        "cloud": cloud_lat,
+    })
+    # Garde au maximum 60 points (30 min si refresh 30s)
+    st.session_state.latency_history = st.session_state.latency_history[-60:]
+
+lat_df = pd.DataFrame(st.session_state.latency_history)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER
+# ══════════════════════════════════════════════════════════════════════════════
+edge_ok  = edge_lat  is not None
+cloud_ok = cloud_lat is not None
+sys_ok   = edge_ok and cloud_ok and not df.empty
+sys_label = "SYSTÈME OPÉRATIONNEL" if sys_ok else "DÉGRADÉ — vérifier les services"
+sys_color = "#00E5A0" if sys_ok else "#FF3B5C"
+
+st.markdown(f"""
+<div class="top-banner">
+  <div>
+    <div class="banner-title">📡 EdgePulse Dashboard</div>
+    <div class="banner-sub">Projet 09 · G09 · ENSA Tétouan · Edge vs Cloud Computing</div>
+  </div>
+  <div style="text-align:right">
+    <div class="banner-status" style="color:{sys_color}">
+      <span class="banner-dot" style="background:{sys_color};box-shadow:0 0 12px {sys_color}"></span>
+      {sys_label}
+    </div>
+    <div style="font-size:0.7rem;color:#64748B;margin-top:4px;
+                font-family:'Space Mono',monospace">{now_str}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — LATENCE DYNAMIQUE
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">01 — Comparaison de Latence en Temps Réel (mesurée)</div>',
+            unsafe_allow_html=True)
+
+col_e, col_c, col_s, col_bar = st.columns([1.2, 1.2, 1.2, 2.4])
+
+with col_e:
+    e_str = f"{edge_lat:.1f}" if edge_lat else "—"
+    st.markdown(f"""
+    <div class="lat-card">
+      <div><span class="lat-badge lat-badge-edge">Edge · Local</span></div>
+      <div class="lat-value lat-value-edge">{e_str}<span class="lat-unit"> ms</span></div>
+      <div class="lat-desc">Microservice B — traitement local<br>Raspberry Pi 5 · ARM64</div>
+    </div>""", unsafe_allow_html=True)
+
+with col_c:
+    cl_str = f"{cloud_lat:.0f}" if cloud_lat else "—"
+    st.markdown(f"""
+    <div class="lat-card">
+      <div><span class="lat-badge lat-badge-cloud">Cloud · Azure</span></div>
+      <div class="lat-value lat-value-cloud">{cl_str}<span class="lat-unit"> ms</span></div>
+      <div class="lat-desc">API Azure · South Africa North<br>Tétouan → Johannesburg</div>
+    </div>""", unsafe_allow_html=True)
+
+with col_s:
+    if edge_lat and cloud_lat:
+        ratio_str = f"{cloud_lat / edge_lat:.0f}"
+        reduction = f"{((cloud_lat - edge_lat) / cloud_lat * 100):.0f}%"
+        extra     = f'<span style="color:#00D4FF">Latence réduite de {reduction}</span>'
+    else:
+        ratio_str, extra = "—", ""
+    st.markdown(f"""
+    <div class="speedup-card">
+      <div style="font-size:.65rem;letter-spacing:.2em;text-transform:uppercase;
+                  color:#64748B;margin-bottom:.8rem;font-family:'Space Mono',monospace">Gain Edge</div>
+      <div class="speedup-value">{ratio_str}×</div>
+      <div style="font-size:.73rem;color:#64748B;margin-top:12px">
+        plus rapide que le Cloud<br>{extra}
+      </div>
+    </div>""", unsafe_allow_html=True)
+
+with col_bar:
+    if edge_lat and cloud_lat:
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            x=["Edge (Local)", "Cloud (Azure)"],
+            y=[edge_lat, cloud_lat],
+            marker_color=["#00E5A0", "#FF6B35"],
+            marker_line_width=0,
+            text=[f"{edge_lat:.1f} ms", f"{cloud_lat:.0f} ms"],
+            textposition="outside",
+            textfont=dict(family="Space Mono", size=11, color="#E8EDF5"),
+            width=0.4,
+        ))
+        fig_bar.add_hline(y=10, line_dash="dot", line_color="#FFD60A", line_width=1.5,
+                          annotation_text="Seuil cible : 10 ms",
+                          annotation_font=dict(size=9, color="#FFD60A"))
+        fig_bar.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="DM Sans", color="#64748B", size=11),
+            margin=dict(l=0, r=10, t=30, b=0),
+            title=dict(text="Latence comparée (ms) — échelle log",
+                       font=dict(size=11, color="#E8EDF5"), x=0),
+            xaxis=dict(gridcolor="#1E2A45", tickfont=dict(size=10, color="#64748B")),
+            yaxis=dict(type="log", gridcolor="#1E2A45",
+                       tickfont=dict(size=10, color="#64748B")),
+            showlegend=False, bargap=0.4,
+        )
+        st.plotly_chart(fig_bar, use_container_width=True,
+                        config={"displayModeBar": False})
+
+# ── Graphique historique des latences (session) ────────────────────────────────
+if len(lat_df) >= 2:
+    st.markdown('<div class="section-label" style="margin-top:1rem">Évolution des latences sur la session</div>',
+                unsafe_allow_html=True)
+    fig_hist = go.Figure()
+    fig_hist.add_trace(go.Scatter(
+        x=lat_df["ts"], y=lat_df["edge"],
+        mode="lines+markers", name="Edge",
+        line=dict(color="#00E5A0", width=2), marker=dict(size=4),
+        hovertemplate="<b>Edge : %{y:.1f} ms</b><br>%{x|%H:%M:%S}<extra></extra>",
+    ))
+    fig_hist.add_trace(go.Scatter(
+        x=lat_df["ts"], y=lat_df["cloud"],
+        mode="lines+markers", name="Cloud",
+        line=dict(color="#FF6B35", width=2), marker=dict(size=4),
+        hovertemplate="<b>Cloud : %{y:.0f} ms</b><br>%{x|%H:%M:%S}<extra></extra>",
+    ))
+    fig_hist.add_hline(y=10, line_dash="dot", line_color="#FFD60A", line_width=1,
+                       annotation_text="10 ms", annotation_font=dict(size=8, color="#FFD60A"))
+    fig_hist.update_layout(**BASE_LAYOUT,
+        title=dict(text="Historique Edge vs Cloud (session en cours)",
+                   font=dict(size=12, color="#E8EDF5"), x=0))
+    fig_hist.update_xaxis(tickformat="%H:%M:%S")
+    st.plotly_chart(fig_hist, use_container_width=True, config={"displayModeBar": False})
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — KPI DYNAMIQUES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">02 — Dernière Mesure Reçue (Cloud)</div>',
+            unsafe_allow_html=True)
+
+if not df.empty:
+    last = df.iloc[-1]
+
+    # Calcul des min/max dynamiques sur l'historique
+    temp_min = df["temperature"].min()
+    temp_max = df["temperature"].max()
+    temp_avg = df["temperature"].mean()
+
+    kpis = [
+        ("🌡️", f"{last['temperature']:.1f}", "°C",  "Température", "#FF6B35", last["temperature"] >= 30),
+        ("💧", f"{last['humidity']:.1f}",    "%",   "Humidité",    "#00D4FF", False),
+        ("🌊", f"{last['pressure']:.1f}",   "hPa",  "Pression",    "#7C3AED", False),
+        ("⚡", f"{last['voltage']:.2f}",     "V",   "Tension",     "#FFD60A", last["voltage"] < 2.5),
+        ("🔋", f"{last['current']:.2f}",     "A",   "Courant",     "#00E5A0", last["current"] > 3.0),
+        ("📦", str(len(df)),               "pts",   "Mesures Cloud","#94A3B8", False),
+    ]
+    cols = st.columns(6)
+    for col, (icon, val, unit, label, color, alerte) in zip(cols, kpis):
+        with col:
+            note = '<div style="font-size:.65rem;color:#FF3B5C;margin-top:6px">⚠ SEUIL DÉPASSÉ</div>' if alerte else ""
+            st.markdown(f"""
+            <div class="kpi-card" style="--accent-color:{color}">
+              <div class="kpi-icon">{icon}</div>
+              <div class="kpi-value">{val}<span class="kpi-unit"> {unit}</span></div>
+              <div class="kpi-label">{label}</div>{note}
+            </div>""", unsafe_allow_html=True)
+
+    # Ligne de stats dynamiques température
+    st.markdown(f"""
+    <div style="background:#0F1525;border:1px solid #1E2A45;border-radius:10px;
+                padding:.8rem 1.5rem;margin-top:.5rem;display:flex;gap:2rem;
+                font-family:'Space Mono',monospace;font-size:.75rem;color:#64748B">
+      <span>🌡️ MIN SESSION : <b style="color:#00D4FF">{temp_min:.1f}°C</b></span>
+      <span>MAX SESSION : <b style="color:#FF6B35">{temp_max:.1f}°C</b></span>
+      <span>MOYENNE : <b style="color:#E8EDF5">{temp_avg:.1f}°C</b></span>
+      <span>DERNIÈRE MAJ : <b style="color:#E8EDF5">{str(last['timestamp'])[:19]}</b></span>
+      <span>DEVICE : <b style="color:#7C3AED">{last.get('device_id','—')}</b></span>
+    </div>""", unsafe_allow_html=True)
+else:
+    st.warning("Aucune donnée cloud disponible pour le moment.")
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — GRAPHIQUES HISTORIQUES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">03 — Historique des Capteurs (Base de Données Cloud)</div>',
+            unsafe_allow_html=True)
+
+if not df.empty:
+    st.plotly_chart(
+        line_chart(df, "temperature", "Température (°C)", "#FF6B35", "°C",
+                   threshold=30, threshold_label="Seuil alerte : 30°C"),
+        use_container_width=True, config={"displayModeBar": False})
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(line_chart(df, "humidity", "Humidité (%)", "#00D4FF", "%"),
+                        use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        st.plotly_chart(line_chart(df, "pressure", "Pression (hPa)", "#7C3AED", "hPa",
+                                   threshold=950, threshold_label="Min : 950 hPa"),
+                        use_container_width=True, config={"displayModeBar": False})
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.plotly_chart(line_chart(df, "voltage", "Tension (V)", "#FFD60A", "V",
+                                   threshold=2.5, threshold_label="Min : 2.5V"),
+                        use_container_width=True, config={"displayModeBar": False})
+    with c4:
+        st.plotly_chart(line_chart(df, "current", "Courant (A)", "#00E5A0", "A"),
+                        use_container_width=True, config={"displayModeBar": False})
+
+    # Accélération 3 axes
+    try:
+        if "acceleration" in df.columns and isinstance(df["acceleration"].iloc[0], dict):
+            df["acc_x"] = df["acceleration"].apply(lambda d: d.get("x", 0))
+            df["acc_y"] = df["acceleration"].apply(lambda d: d.get("y", 0))
+            df["acc_z"] = df["acceleration"].apply(lambda d: d.get("z", 0))
+        if "acc_x" in df.columns:
+            fig_acc = go.Figure()
+            for axis, color in [("acc_x","#FF3B5C"),("acc_y","#00D4FF"),("acc_z","#7C3AED")]:
+                fig_acc.add_trace(go.Scatter(
+                    x=df["timestamp"], y=df[axis],
+                    mode="lines", name=f"Axe {axis[-1].upper()}",
+                    line=dict(color=color, width=1.8),
+                    hovertemplate=f"<b>%{{y:.3f}} m/s²</b><extra>Axe {axis[-1].upper()}</extra>",
+                ))
+            fig_acc.update_layout(**BASE_LAYOUT,
+                title=dict(text="Accélération (m/s²) — 3 axes",
+                           font=dict(size=12, color="#E8EDF5"), x=0))
+            fig_acc.update_xaxis(tickformat="%H:%M")
+            st.plotly_chart(fig_acc, use_container_width=True,
+                            config={"displayModeBar": False})
+    except Exception:
+        pass
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — ALERTES & SERVICES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">04 — Alertes Edge & État des Services</div>',
+            unsafe_allow_html=True)
+col_al, col_st = st.columns([1.5, 1])
+
+with col_al:
+    st.markdown("**🚨 Dernières alertes (Microservice B)**")
+    if alerts:
+        for a in alerts[:8]:
+            ts = a.get("timestamp","")[:19].replace("T"," ")
+            st.markdown(f"""
+            <div class="alert-pill">
+              <div>
+                <div class="alert-type">{a.get('type','—')} · {a.get('capteur','—')}</div>
+                <div class="alert-val">{a.get('message','—')}</div>
+              </div>
+              <div class="alert-time">{ts}</div>
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:rgba(0,229,160,.06);border:1px solid rgba(0,229,160,.2);
+                    border-radius:10px;padding:1rem;text-align:center;
+                    color:#00E5A0;font-size:.85rem">
+          ✅ Aucune alerte active — tous les capteurs dans les seuils normaux
+        </div>""", unsafe_allow_html=True)
+
+with col_st:
+    st.markdown("**🖥️ État des Services**")
+    b_detail = (f"Buffer : {b_health.get('buffer_taille',0)} · "
+                f"Alertes : {b_health.get('total_alertes',0)} · "
+                f"Agrégats : {b_health.get('total_agregats',0)}"
+                if b_health else "Inaccessible")
+    c_detail = (f"Latence : {cloud_lat:.0f} ms · "
+                f"Status : {c_health.get('status','?')}"
+                if cloud_lat and c_health else "Timeout")
+    svcs = [
+        ("Microservice B (Edge)",   edge_ok,        b_detail),
+        ("API Cloud (Azure)",       cloud_ok,        c_detail),
+        ("Base de données (Cloud)", not df.empty,
+         f"{len(df)} enregistrement(s) · dernier id={df['id'].max() if not df.empty else '—'}"),
+        ("Microservice C (Sync)",   True,           "Synchronisation toutes les 5 min"),
+    ]
+    for name, ok, detail in svcs:
+        dot = "#00E5A0" if ok else "#FF3B5C"
+        st.markdown(f"""
+        <div style="background:#0F1525;border:1px solid #1E2A45;border-radius:10px;
+                    padding:.8rem 1rem;margin-bottom:.5rem;display:flex;
+                    align-items:center;gap:12px">
+          <div style="width:8px;height:8px;border-radius:50%;background:{dot};
+                      box-shadow:0 0 8px {dot};flex-shrink:0"></div>
+          <div>
+            <div style="font-size:.82rem;font-weight:600;color:#E8EDF5">{name}</div>
+            <div style="font-size:.7rem;color:#64748B;margin-top:2px">{detail}</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — TABLEAU DONNÉES BRUTES
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="section-label">05 — Données Brutes (Cloud · 15 dernières mesures)</div>',
+            unsafe_allow_html=True)
+
+if not df.empty:
+    show_cols = [c for c in ["id","timestamp","temperature","humidity",
+                              "pressure","voltage","current","device_id"]
+                 if c in df.columns]
+    disp = df[show_cols].tail(15).sort_values("id", ascending=False).reset_index(drop=True)
+    disp["timestamp"] = disp["timestamp"].astype(str).str[:19]
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+# ── Footer & auto-refresh ──────────────────────────────────────────────────────
+st.markdown("""
+<div style="text-align:center;padding:2rem 0 .5rem;font-family:'Space Mono',monospace;
+            font-size:.65rem;color:#1E2A45;letter-spacing:.1em;text-transform:uppercase">
+  EDGEPULSE · PROJET 09 · G09 · ENSA TÉTOUAN · MAI 2026 · PROF. BENALY MOHAMED
+  · ACTUALISATION AUTO 30S
+</div>""", unsafe_allow_html=True)
+
+time.sleep(30)
+st.rerun()
