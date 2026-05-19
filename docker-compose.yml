@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  microservice-c:
+    build: .
+    container_name: microservice-c
+    environment:
+      # Remplacer par l'URL locale du Microservice B pour les tests
+      - MSVC_B_URL=http://localhost:8001
+    restart: unless-stopped
+    networks:
+      - edge-net
+
+networks:
+  edge-net:
+    driver: bridge
