@@ -1,8 +1,29 @@
 version: "3.9"
 
 services:
-  microservice-b:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     clouduser
+      POSTGRES_PASSWORD: cloudpass
+      POSTGRES_DB:       clouddb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+
+  api:
     build: .
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql://clouduser:cloudpass@postgres:5432/clouddb
+      API_KEY:      edge-secret-key-2026
+    depends_on:
+      - postgres
     restart: unless-stopped
+
+volumes:
+  pgdata:
