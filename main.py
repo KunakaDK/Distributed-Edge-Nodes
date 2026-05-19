@@ -1,94 +1,197 @@
-import time, logging, requests
+from fastapi import FastAPI
+from pydantic import BaseModel
 from datetime import datetime, timezone
+from collections import deque
+from typing import Optional
+import statistics
+import uvicorn
 
-# ─── Configuration ─────────────────────────────────────────────
-CLOUD_URL  = "https://cloudserver-g09.southafricanorth.cloudapp.azure.com"
-CLOUD_KEY  = "edge-secret-key-2026"
-import os
-MSVC_B_URL = os.getenv("MSVC_B_URL", "http://microservice-b-service.edge.svc.cluster.local:8001")   # K3s namespace
-# Pour test local avec Docker Compose:
-# MSVC_B_URL = "http://microservice-b:8001"
+app = FastAPI(title="Microservice B - Traitement Edge")
 
-SYNC_INTERVAL   = 5 * 60   # 5 minutes en secondes
-MAX_RETRIES     = 5
-RETRY_BASE_WAIT = 2         # secondes (backoff exponentiel x2)
+# ── Schéma  ───────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S"
-)
-log = logging.getLogger("microservice-c")
+class Vec3(BaseModel):
+    x: float
+    y: float
+    z: float
 
-HEADERS_CLOUD = {
-    "x-api-key":    CLOUD_KEY,
-    "Content-Type": "application/json",
+class GPS(BaseModel):
+    lat: float
+    lon: float
+
+class DonneesBrutes(BaseModel):
+    device_id:    str
+    timestamp:    str
+    temperature:  float
+    humidity:     float
+    pressure:     float
+    acceleration: Vec3
+    gyroscope:    Vec3
+    voltage:      float
+    current:      float
+    gps:          GPS
+
+# ── Seuils d'alerte  ───────────────────────
+
+SEUILS = {
+    "temperature": {"min": 10.0,  "max": 30.0},
+    "humidity":    {"min": 20.0,  "max": 85.0},
+    "pressure":    {"min": 950.0, "max": 1050.0},
+    "voltage":     {"min": 2.5,   "max": 5.5},
+    "current":     {"min": 0.0,   "max": 3.0},
 }
 
-# ─── Récupérer l'agrégat depuis Microservice B ─────────────────
-def fetch_agregat():
-    try:
-        r = requests.get(f"{MSVC_B_URL}/agregat", timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("statut") == "vide":
-            log.info("Buffer vide – rien à envoyer ce cycle.")
-            return None
-        return data.get("agregat")
-    except requests.RequestException as e:
-        log.error(f"Erreur récupération agrégat: {e}")
+# ── Stockage en mémoire ───────────────────────────────────────────────────
+# Buffer pour agrégation (5 minutes = 300 entrées à 1/s)
+
+buffer:   deque = deque(maxlen=300)   # données brutes en attente d'agrégation
+alertes:  list  = []                  # alertes générées
+agregats: list  = []                  # moyennes calculées toutes les 5 minutes
+
+# ── Logique de filtrage ───────────────────────────────────────────────────
+
+def detecter_alertes(donnee: DonneesBrutes) -> list:
+    """Vérifie chaque capteur contre les seuils. Retourne la liste des alertes."""
+    result = []
+    champs = {
+        "temperature": donnee.temperature,
+        "humidity":    donnee.humidity,
+        "pressure":    donnee.pressure,
+        "voltage":     donnee.voltage,
+        "current":     donnee.current,
+    }
+    for champ, valeur in champs.items():
+        seuil = SEUILS[champ]
+        if valeur > seuil["max"]:
+            result.append({
+                "type":      "ALERTE_HAUTE",
+                "capteur":   champ,
+                "device_id": donnee.device_id,
+                "valeur":    valeur,
+                "seuil_max": seuil["max"],
+                "message":   f"{champ} trop élevé : {valeur} (max {seuil['max']})",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        elif valeur < seuil["min"]:
+            result.append({
+                "type":      "ALERTE_BASSE",
+                "capteur":   champ,
+                "device_id": donnee.device_id,
+                "valeur":    valeur,
+                "seuil_min": seuil["min"],
+                "message":   f"{champ} trop bas : {valeur} (min {seuil['min']})",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+    return result
+
+
+def calculer_agregat() -> Optional[dict]:
+    """
+    Calcule la moyenne de toutes les valeurs dans le buffer.
+    Appelé toutes les 5 minutes par le Microservice C via GET /agregat.
+    Vide le buffer après calcul.
+    """
+    if not buffer:
         return None
 
-# ─── Envoyer vers l'API Cloud avec retry exponentiel ──────────
-def send_to_cloud(payload: dict) -> bool:
-    wait = RETRY_BASE_WAIT
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            log.info(f"Envoi Cloud (tentative {attempt}/{MAX_RETRIES})...")
-            start = time.time()
-            r = requests.post(
-                f"{CLOUD_URL}/data",
-                json=payload,
-                headers=HEADERS_CLOUD,
-                timeout=15,
-                # NE PAS mettre verify=False – le certificat est valide
-            )
-            r.raise_for_status()
-            latency = (time.time() - start) * 1000
-            log.info(f"Succes ! id={r.json().get('id')} latence={latency:.1f}ms")
-            return True
-        except requests.HTTPError as e:
-            log.error(f"Erreur HTTP {e.response.status_code}: {e}")
-            if e.response.status_code in (400, 401, 403):
-                log.error("Erreur non-retriable. Abandon.")
-                return False
-        except requests.RequestException as e:
-            log.warning(f"Erreur reseau: {e} – retry dans {wait}s")
-        time.sleep(wait)
-        wait = min(wait * 2, 120)   # cap à 2 minutes
-    log.error("Echec apres tous les retries. Donnee perdue pour ce cycle.")
-    return False
+    snap = list(buffer)
+    buffer.clear()
 
-# ─── Boucle principale ─────────────────────────────────────────
-def main():
-    log.info("Microservice C demarre. Intervalle: 5 min.")
-    while True:
-        cycle_start = time.time()
-        log.info("=== Nouveau cycle de synchronisation ===")
+    agregat = {
+        "device_id":   snap[-1]["device_id"],
+        "timestamp":   datetime.now(timezone.utc).isoformat(),
+        "nb_mesures":  len(snap),
+        "temperature": round(statistics.mean(d["temperature"] for d in snap), 2),
+        "humidity":    round(statistics.mean(d["humidity"]    for d in snap), 2),
+        "pressure":    round(statistics.mean(d["pressure"]    for d in snap), 2),
+        "voltage":     round(statistics.mean(d["voltage"]     for d in snap), 2),
+        "current":     round(statistics.mean(d["current"]     for d in snap), 2),
+        "acceleration": {
+            "x": round(statistics.mean(d["acceleration"]["x"] for d in snap), 4),
+            "y": round(statistics.mean(d["acceleration"]["y"] for d in snap), 4),
+            "z": round(statistics.mean(d["acceleration"]["z"] for d in snap), 4),
+        },
+        "gyroscope": {
+            "x": round(statistics.mean(d["gyroscope"]["x"] for d in snap), 4),
+            "y": round(statistics.mean(d["gyroscope"]["y"] for d in snap), 4),
+            "z": round(statistics.mean(d["gyroscope"]["z"] for d in snap), 4),
+        },
+        "gps": {
+            "lat": round(statistics.mean(d["gps"]["lat"] for d in snap), 6),
+            "lon": round(statistics.mean(d["gps"]["lon"] for d in snap), 6),
+        },
+    }
+    agregats.append(agregat)
+    return agregat
 
-        agregat = fetch_agregat()
-        if agregat:
-            # Assurer que device_id est présent
-            if "device_id" not in agregat:
-                agregat["device_id"] = "edge-node-01"
-            log.info(f"Agregat recu: {agregat.get('nb_mesures',0)} mesures, "
-                     f"temp={agregat.get('temperature','N/A')}°C")
-            send_to_cloud(agregat)
+# ── Endpoints ─────────────────────────────────────────────────────────────
 
-        elapsed = time.time() - cycle_start
-        sleep_time = max(0, SYNC_INTERVAL - elapsed)
-        log.info(f"Cycle termine en {elapsed:.1f}s. Prochain dans {sleep_time:.0f}s.")
-        time.sleep(sleep_time)
+@app.post("/traiter")
+def recevoir(donnee: DonneesBrutes):
+    """
+    Reçoit une donnée brute du Microservice A.
+    - Détecte les alertes immédiatement (< 10 ms, sans Internet)
+    - Stocke dans le buffer pour agrégation
+    """
+    # 1. Détection alertes (chemin rapide, local)
+    nouvelles_alertes = detecter_alertes(donnee)
+    for a in nouvelles_alertes:
+        alertes.append(a)
+        print(f"[ALERTE] {a['message']}")
+
+    # 2. Mise en buffer pour agrégation
+    buffer.append({
+        "device_id":   donnee.device_id,
+        "timestamp":   donnee.timestamp,
+        "temperature": donnee.temperature,
+        "humidity":    donnee.humidity,
+        "pressure":    donnee.pressure,
+        "voltage":     donnee.voltage,
+        "current":     donnee.current,
+        "acceleration": donnee.acceleration.dict(),
+        "gyroscope":    donnee.gyroscope.dict(),
+        "gps":          donnee.gps.dict(),
+    })
+
+    return {
+        "statut":           "traitée",
+        "alertes_emises":   len(nouvelles_alertes),
+        "alertes":          nouvelles_alertes,
+        "buffer_taille":    len(buffer),
+    }
+
+
+@app.get("/agregat")
+def get_agregat():
+    """
+    Appelé par le Microservice C toutes les 5 minutes.
+    Retourne la moyenne du buffer et le vide.
+    """
+    agregat = calculer_agregat()
+    if agregat is None:
+        return {"statut": "vide", "message": "Aucune donnée dans le buffer"}
+    return {"statut": "ok", "agregat": agregat}
+
+
+@app.get("/alertes")
+def get_alertes(limit: int = 50):
+    """Retourne les dernières alertes."""
+    return {
+        "total":   len(alertes),
+        "alertes": alertes[-limit:],
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "statut":          "ok",
+        "buffer_taille":   len(buffer),
+        "total_alertes":   len(alertes),
+        "total_agregats":  len(agregats),
+        "timestamp":       datetime.now(timezone.utc).isoformat(),
+    }
+
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=8001)
